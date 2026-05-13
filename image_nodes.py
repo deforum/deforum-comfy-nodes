@@ -341,6 +341,121 @@ class ColorCorrectionAndSharpening(ImageNode):
         
         return (processed_image,)
 
+def _match_mean_std(target, reference, eps=1e-6):
+    channels = min(target.shape[-1], reference.shape[-1], 3)
+    matched = target.clone()
+    target_rgb = target[..., :channels]
+    reference_rgb = reference[..., :channels]
+
+    target_mean = target_rgb.reshape(-1, channels).mean(dim=0)
+    target_std = target_rgb.reshape(-1, channels).std(dim=0, unbiased=False)
+    reference_mean = reference_rgb.reshape(-1, channels).mean(dim=0)
+    reference_std = reference_rgb.reshape(-1, channels).std(dim=0, unbiased=False)
+
+    matched[..., :channels] = (
+        (target_rgb - target_mean)
+        * (reference_std / (target_std + eps))
+        + reference_mean
+    )
+    return matched
+
+def _histogram_match_channel(source, reference, bins=256):
+    source_hist, source_edges = np.histogram(source, bins=bins, range=(0.0, 1.0))
+    reference_hist, reference_edges = np.histogram(reference, bins=bins, range=(0.0, 1.0))
+
+    source_cdf = source_hist.cumsum().astype(np.float64)
+    reference_cdf = reference_hist.cumsum().astype(np.float64)
+    if source_cdf[-1] == 0 or reference_cdf[-1] == 0:
+        return source
+
+    source_cdf /= source_cdf[-1]
+    reference_cdf /= reference_cdf[-1]
+    source_centers = (source_edges[:-1] + source_edges[1:]) * 0.5
+    reference_centers = (reference_edges[:-1] + reference_edges[1:]) * 0.5
+
+    source_quantiles = np.interp(source, source_centers, source_cdf)
+    return np.interp(source_quantiles, reference_cdf, reference_centers)
+
+def _match_histogram(target, reference):
+    channels = min(target.shape[-1], reference.shape[-1], 3)
+    target_np = target.detach().cpu().numpy()
+    reference_np = reference.detach().cpu().numpy()
+    matched_np = target_np.copy()
+
+    for channel in range(channels):
+        matched_np[..., channel] = _histogram_match_channel(
+            target_np[..., channel].reshape(-1),
+            reference_np[..., channel].reshape(-1),
+        ).reshape(target_np.shape[:-1])
+
+    return torch.from_numpy(matched_np).to(device=target.device, dtype=target.dtype)
+
+def _luminance(image):
+    channels = image.shape[-1]
+    if channels < 3:
+        return image.mean(dim=-1, keepdim=True)
+    weights = torch.tensor([0.2126, 0.7152, 0.0722], device=image.device, dtype=image.dtype)
+    return (image[..., :3] * weights).sum(dim=-1, keepdim=True)
+
+def _restore_luminance(target, matched):
+    channels = min(target.shape[-1], matched.shape[-1], 3)
+    if channels == 0:
+        return matched
+
+    restored = matched.clone()
+    luminance_delta = _luminance(target) - _luminance(matched)
+    restored[..., :channels] = restored[..., :channels] + luminance_delta
+    return restored
+
+@VariantSupport()
+class ImageColorMatch(ImageNode):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "reference_image": ("IMAGE",),
+                "strength": ("FLOAT", {"default": 0.5, "min": 0.0, "max": 1.0, "step": 0.01}),
+                "method": (["mean_std", "histogram"],),
+                "preserve_luminance": ("BOOLEAN", {"default": True}),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "match_color"
+
+    def match_color(self, images, reference_image, strength, method, preserve_luminance):
+        if images.ndim != 4 or reference_image.ndim != 4:
+            raise ValueError("Expected IMAGE tensors with shape BHWC")
+
+        strength = max(0.0, min(float(strength), 1.0))
+        if strength == 0.0:
+            return (images,)
+
+        matched_frames = []
+        reference_count = reference_image.shape[0]
+        for frame_index in range(images.shape[0]):
+            target = images[frame_index]
+            reference = reference_image[min(frame_index, reference_count - 1)].to(
+                device=target.device,
+                dtype=target.dtype,
+            )
+
+            if method == "mean_std":
+                matched = _match_mean_std(target, reference)
+            elif method == "histogram":
+                matched = _match_histogram(target, reference)
+            else:
+                raise ValueError(f"Unknown color match method: {method}")
+
+            if preserve_luminance:
+                matched = _restore_luminance(target, matched)
+
+            matched = torch.lerp(target, matched, strength).clamp(0.0, 1.0)
+            matched_frames.append(matched)
+
+        return (torch.stack(matched_frames, dim=0),)
+
 def _sequence_length(value):
     if torch.is_tensor(value):
         return int(value.numel()) if value.ndim > 0 else 1
@@ -603,6 +718,7 @@ IMAGE_NODE_CLASS_MAPPINGS = {
     f"ColorCorrection{NODE_POSTFIX}": ColorCorrection,
     f"AdaptiveSharpening{NODE_POSTFIX}": AdaptiveSharpening,
     f"ColorCorrectionAndSharpening{NODE_POSTFIX}": ColorCorrectionAndSharpening,
+    f"ImageColorMatch{NODE_POSTFIX}": ImageColorMatch,
     f"ImageTransform{NODE_POSTFIX}": ImageTransform,
     f"SmartLoopPreviewImage{NODE_POSTFIX}": SmartLoopPreviewImage
 }
@@ -611,6 +727,7 @@ IMAGE_NODE_DISPLAY_NAME_MAPPINGS = {
     f"ColorCorrection{NODE_POSTFIX}": f"Color Correction {NODE_POSTFIX}",
     f"AdaptiveSharpening{NODE_POSTFIX}": f"Adaptive Sharpening {NODE_POSTFIX}",
     f"ColorCorrectionAndSharpening{NODE_POSTFIX}": f"Color Correction + Sharpening {NODE_POSTFIX}",
+    f"ImageColorMatch{NODE_POSTFIX}": f"Image Color Match {NODE_POSTFIX}",
     f"ImageTransform{NODE_POSTFIX}": f"Image Transform {NODE_POSTFIX}",
     f"SmartLoopPreviewImage{NODE_POSTFIX}": f"Smart Loop Preview Image {NODE_POSTFIX}"
 } 
