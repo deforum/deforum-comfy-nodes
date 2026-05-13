@@ -206,15 +206,36 @@ class PrepareLatentDenoise(LatentNode):
 
         return (latent_out, sig_slice, start_at)
 
+@VariantSupport()
+class LatentNoiseInjection(LatentNode):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "samples": ("LATENT",),
+                "noise_std": ("FLOAT", {"default": 0.1, "min": 0.0, "max": 1.0, "step": 0.01}),
+            },
+        }
+
+    RETURN_TYPES = ("LATENT",)
+    FUNCTION = "inject_noise"
+
+    def inject_noise(self, samples, noise_std):
+        result = samples.copy()
+        result["samples"] = result["samples"] + torch.randn_like(result["samples"]) * noise_std
+        return (result,)
+
 # -----------------------------------------------------------------------------
 #  Registration tables
 # -----------------------------------------------------------------------------
 LATENT_NODE_CLASS_MAPPINGS = {
     f"SeedInterpNoise{NODE_POSTFIX}": SeedInterpNoise,
     f"PrepareLatentDenoise{NODE_POSTFIX}": PrepareLatentDenoise,
+    f"LatentNoiseInjection{NODE_POSTFIX}": LatentNoiseInjection,
 }
 
 LATENT_NODE_DISPLAY_NAME_MAPPINGS = {
     f"SeedInterpNoise{NODE_POSTFIX}": f"Seed Interp Noise {NODE_POSTFIX}",
     f"PrepareLatentDenoise{NODE_POSTFIX}": f"Prepare Latent Denoise {NODE_POSTFIX}",
+    f"LatentNoiseInjection{NODE_POSTFIX}": f"Latent Noise Injection {NODE_POSTFIX}",
 }

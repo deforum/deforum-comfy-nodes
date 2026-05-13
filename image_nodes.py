@@ -1,5 +1,5 @@
 import torch
-import cv2
+import torch.nn.functional as F
 import numpy as np
 from PIL import Image, ImageFilter
 from PIL.PngImagePlugin import PngInfo
@@ -35,8 +35,87 @@ def pil_to_tensor(pil_image):
 
 def measure_saturation(img_array):
     """Measure the saturation of an RGB image array."""
-    hls = cv2.cvtColor(img_array, cv2.COLOR_RGB2HLS)
-    return hls[:, :, 2].mean() / 255.0
+    _, _, saturation = rgb_to_hls(img_array)
+    return float(saturation.mean())
+
+def rgb_to_hls(img_array):
+    rgb = img_array.astype(np.float32)
+    if rgb.max(initial=0) > 1.0:
+        rgb = rgb / 255.0
+
+    r = rgb[:, :, 0]
+    g = rgb[:, :, 1]
+    b = rgb[:, :, 2]
+    maxc = np.max(rgb[:, :, :3], axis=2)
+    minc = np.min(rgb[:, :, :3], axis=2)
+    lightness = (minc + maxc) * 0.5
+    saturation = np.zeros_like(lightness)
+    hue = np.zeros_like(lightness)
+
+    non_gray = maxc != minc
+    delta = maxc - minc
+    low_light = lightness <= 0.5
+    saturation[non_gray & low_light] = (
+        delta[non_gray & low_light] / (maxc[non_gray & low_light] + minc[non_gray & low_light])
+    )
+    saturation[non_gray & ~low_light] = (
+        delta[non_gray & ~low_light] / (2.0 - maxc[non_gray & ~low_light] - minc[non_gray & ~low_light])
+    )
+
+    safe_delta = np.where(non_gray, delta, 1.0)
+    rc = (maxc - r) / safe_delta
+    gc = (maxc - g) / safe_delta
+    bc = (maxc - b) / safe_delta
+
+    red_max = non_gray & (r == maxc)
+    green_max = non_gray & (g == maxc)
+    blue_max = non_gray & (b == maxc)
+    hue[red_max] = bc[red_max] - gc[red_max]
+    hue[green_max] = 2.0 + rc[green_max] - bc[green_max]
+    hue[blue_max] = 4.0 + gc[blue_max] - rc[blue_max]
+    hue = (hue / 6.0) % 1.0
+
+    return hue, lightness, saturation
+
+def _hue_to_rgb(p, q, hue):
+    hue = hue % 1.0
+    result = np.empty_like(hue)
+
+    first = hue < (1.0 / 6.0)
+    second = (hue >= (1.0 / 6.0)) & (hue < 0.5)
+    third = (hue >= 0.5) & (hue < (2.0 / 3.0))
+    fourth = hue >= (2.0 / 3.0)
+
+    result[first] = p[first] + (q[first] - p[first]) * 6.0 * hue[first]
+    result[second] = q[second]
+    result[third] = p[third] + (q[third] - p[third]) * ((2.0 / 3.0) - hue[third]) * 6.0
+    result[fourth] = p[fourth]
+    return result
+
+def hls_to_rgb(hue, lightness, saturation):
+    q = np.where(
+        lightness < 0.5,
+        lightness * (1.0 + saturation),
+        lightness + saturation - lightness * saturation,
+    )
+    p = 2.0 * lightness - q
+
+    r = _hue_to_rgb(p, q, hue + (1.0 / 3.0))
+    g = _hue_to_rgb(p, q, hue)
+    b = _hue_to_rgb(p, q, hue - (1.0 / 3.0))
+
+    gray = saturation == 0
+    r[gray] = lightness[gray]
+    g[gray] = lightness[gray]
+    b[gray] = lightness[gray]
+
+    return np.stack([r, g, b], axis=2)
+
+def adjust_saturation(img_array, factor):
+    hue, lightness, saturation = rgb_to_hls(img_array)
+    saturation = np.clip(saturation * factor, 0.0, 1.0)
+    rgb = hls_to_rgb(hue, lightness, saturation)
+    return np.clip(np.round(rgb * 255.0), 0, 255).astype(np.uint8)
 
 @VariantSupport()
 class ColorCorrection(ImageNode):
@@ -115,11 +194,7 @@ class ColorCorrection(ImageNode):
                 
                 # Apply saturation correction
                 sat_factor = min(saturation_threshold / (saturation + 1e-6), max_saturation_factor)
-                hls = cv2.cvtColor(corrected_img_array, cv2.COLOR_RGB2HLS)
-                H, L_chan, S = cv2.split(hls)
-                S_boosted = np.clip(S * sat_factor, 0, 255).astype(np.uint8)
-                hls_boosted = cv2.merge([H, L_chan, S_boosted])
-                corrected_img_array = cv2.cvtColor(hls_boosted, cv2.COLOR_HLS2RGB)
+                corrected_img_array = adjust_saturation(corrected_img_array, sat_factor)
                 
                 corrected_img = Image.fromarray(corrected_img_array)
             
@@ -265,7 +340,154 @@ class ColorCorrectionAndSharpening(ImageNode):
             )[0]
         
         return (processed_image,)
-    
+
+def _sequence_length(value):
+    if torch.is_tensor(value):
+        return int(value.numel()) if value.ndim > 0 else 1
+    if isinstance(value, np.ndarray):
+        return int(value.size) if value.ndim > 0 else 1
+    if isinstance(value, (list, tuple)):
+        return len(value)
+    return 1
+
+def _value_at_frame(value, frame_index, default=0.0):
+    if value is None:
+        return default
+    if torch.is_tensor(value):
+        if value.ndim == 0:
+            return float(value.item())
+        flat = value.detach().flatten()
+        return float(flat[min(frame_index, flat.numel() - 1)].item())
+    if isinstance(value, np.ndarray):
+        flat = value.flatten()
+        return float(flat[min(frame_index, flat.size - 1)])
+    if isinstance(value, (list, tuple)):
+        return float(value[min(frame_index, len(value) - 1)])
+    return float(value)
+
+def _transform_matrix(transform_type, x_value, y_value, width, height, device, dtype):
+    cx = width / 2.0
+    cy = height / 2.0
+    matrix = torch.eye(3, device=device, dtype=dtype)
+
+    if transform_type == "translate":
+        matrix[0, 2] = x_value
+        matrix[1, 2] = y_value
+    elif transform_type == "rotate":
+        angle = torch.tensor(np.deg2rad(x_value), device=device, dtype=dtype)
+        alpha = torch.cos(angle)
+        beta = torch.sin(angle)
+        matrix[0, 0] = alpha
+        matrix[0, 1] = beta
+        matrix[0, 2] = (1.0 - alpha) * cx - beta * cy
+        matrix[1, 0] = -beta
+        matrix[1, 1] = alpha
+        matrix[1, 2] = beta * cx + (1.0 - alpha) * cy
+    elif transform_type == "scale":
+        scale_x = 1.0 + x_value
+        scale_y = 1.0 + y_value
+        matrix[0, 0] = scale_x
+        matrix[0, 2] = cx * (1.0 - scale_x)
+        matrix[1, 1] = scale_y
+        matrix[1, 2] = cy * (1.0 - scale_y)
+    else:
+        raise ValueError(f"Unknown transform type: {transform_type}")
+
+    return matrix
+
+def _normalize_pixel_coords(coords, size):
+    if size <= 1:
+        return torch.zeros_like(coords)
+    return (coords / (size - 1)) * 2.0 - 1.0
+
+@VariantSupport()
+class ImageTransform(ImageNode):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "images": ("IMAGE",),
+                "transform_type": (["translate", "rotate", "scale"],),
+                "x_value": ("FLOAT", {"default": 0.0, "min": -1000.0, "max": 1000.0, "step": 0.1}),
+                "y_value": ("FLOAT", {"default": 0.0, "min": -1000.0, "max": 1000.0, "step": 0.1}),
+                "edge_mode": (["extend", "wrap", "reflect", "none"],),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE",)
+    FUNCTION = "apply_transform"
+
+    def apply_transform(
+        self,
+        images,
+        transform_type,
+        x_value,
+        y_value,
+        edge_mode,
+    ):
+        if images.ndim != 4:
+            raise ValueError("Expected IMAGE tensor with shape BHWC")
+
+        batch_size, height, width, _ = images.shape
+        num_frames = max(
+            batch_size,
+            _sequence_length(x_value),
+            _sequence_length(y_value),
+        )
+
+        device = images.device
+        dtype = images.dtype
+        frame_indices = torch.arange(num_frames, device=device) % batch_size
+        source_images = images[frame_indices].permute(0, 3, 1, 2)
+
+        y_coords, x_coords = torch.meshgrid(
+            torch.arange(height, device=device, dtype=dtype),
+            torch.arange(width, device=device, dtype=dtype),
+            indexing="ij",
+        )
+        ones = torch.ones_like(x_coords)
+        output_coords = torch.stack([x_coords, y_coords, ones], dim=0).reshape(3, -1)
+
+        inverse_matrices = []
+        for frame_index in range(num_frames):
+            frame_x = _value_at_frame(x_value, frame_index, 0.0)
+            frame_y = _value_at_frame(y_value, frame_index, 0.0)
+            matrix = _transform_matrix(transform_type, frame_x, frame_y, width, height, device, dtype)
+            inverse_matrices.append(torch.linalg.inv(matrix))
+
+        inverse = torch.stack(inverse_matrices, dim=0)
+        coords = torch.matmul(inverse, output_coords.unsqueeze(0).expand(num_frames, -1, -1))
+        x_source = coords[:, 0, :]
+        y_source = coords[:, 1, :]
+
+        if edge_mode == "wrap":
+            x_source = torch.remainder(x_source, width)
+            y_source = torch.remainder(y_source, height)
+
+        grid = torch.stack(
+            [
+                _normalize_pixel_coords(x_source, width),
+                _normalize_pixel_coords(y_source, height),
+            ],
+            dim=-1,
+        ).reshape(num_frames, height, width, 2)
+
+        padding_modes = {
+            "extend": "border",
+            "wrap": "zeros",
+            "reflect": "reflection",
+            "none": "zeros",
+        }
+        transformed = F.grid_sample(
+            source_images,
+            grid,
+            mode="bilinear",
+            padding_mode=padding_modes[edge_mode],
+            align_corners=True,
+        )
+
+        return (transformed.permute(0, 2, 3, 1).clamp(0.0, 1.0),)
+
     
 class SmartLoopPreviewImage(ImageNode, SaveImage):
     """
@@ -381,6 +603,7 @@ IMAGE_NODE_CLASS_MAPPINGS = {
     f"ColorCorrection{NODE_POSTFIX}": ColorCorrection,
     f"AdaptiveSharpening{NODE_POSTFIX}": AdaptiveSharpening,
     f"ColorCorrectionAndSharpening{NODE_POSTFIX}": ColorCorrectionAndSharpening,
+    f"ImageTransform{NODE_POSTFIX}": ImageTransform,
     f"SmartLoopPreviewImage{NODE_POSTFIX}": SmartLoopPreviewImage
 }
 
@@ -388,5 +611,6 @@ IMAGE_NODE_DISPLAY_NAME_MAPPINGS = {
     f"ColorCorrection{NODE_POSTFIX}": f"Color Correction {NODE_POSTFIX}",
     f"AdaptiveSharpening{NODE_POSTFIX}": f"Adaptive Sharpening {NODE_POSTFIX}",
     f"ColorCorrectionAndSharpening{NODE_POSTFIX}": f"Color Correction + Sharpening {NODE_POSTFIX}",
+    f"ImageTransform{NODE_POSTFIX}": f"Image Transform {NODE_POSTFIX}",
     f"SmartLoopPreviewImage{NODE_POSTFIX}": f"Smart Loop Preview Image {NODE_POSTFIX}"
 } 
