@@ -2,6 +2,60 @@
 from .tools import VariantSupport
 from .base_node import NODE_POSTFIX, LogicNode
 
+
+class _AnySwitchInputs(dict):
+    def __init__(self, count=5):
+        super().__init__((f"any_{i:02d}", ("*",)) for i in range(1, count + 1))
+
+    def __contains__(self, key):
+        return isinstance(key, str) and key.startswith("any_")
+
+    def __getitem__(self, key):
+        if key in self.keys():
+            return super().__getitem__(key)
+        if key in self:
+            return ("*",)
+        raise KeyError(key)
+
+
+def _any_input_sort_key(key):
+    suffix = key.rsplit("_", 1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
+
+
+def _is_empty_any_value(value):
+    if value is None:
+        return True
+    if isinstance(value, dict) and "model" in value and "clip" in value:
+        return all(item is None for item in value.values())
+    return False
+
+
+@VariantSupport()
+class AnySwitch(LogicNode):
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {},
+            "optional": _AnySwitchInputs(),
+        }
+
+    RETURN_TYPES = ("*",)
+    RETURN_NAMES = ("*",)
+    FUNCTION = "switch"
+
+    def switch(self, **kwargs):
+        keys = sorted(
+            (key for key in kwargs if key.startswith("any_")),
+            key=_any_input_sort_key,
+        )
+        for key in keys:
+            value = kwargs.get(key)
+            if not _is_empty_any_value(value):
+                return (value,)
+        return (None,)
+
+
 @VariantSupport()
 class LazySwitch(LogicNode):
     def __init__(self):
@@ -168,6 +222,7 @@ class LazyMixImages(LogicNode):
         return (image1 * (1. - mask) + image2 * mask,)
 
 GENERAL_NODE_CLASS_MAPPINGS = {
+    f"AnySwitch{NODE_POSTFIX}": AnySwitch,
     f"LazySwitch{NODE_POSTFIX}": LazySwitch,
     f"LazyIndexSwitch{NODE_POSTFIX}": LazyIndexSwitch,
     f"LazyMixImages{NODE_POSTFIX}": LazyMixImages,
@@ -175,6 +230,7 @@ GENERAL_NODE_CLASS_MAPPINGS = {
 }
 
 GENERAL_NODE_DISPLAY_NAME_MAPPINGS = {
+    f"AnySwitch{NODE_POSTFIX}": f"Any Switch {NODE_POSTFIX}",
     f"LazySwitch{NODE_POSTFIX}": f"Lazy Switch {NODE_POSTFIX}",
     f"LazyIndexSwitch{NODE_POSTFIX}": f"Lazy Index Switch {NODE_POSTFIX}",
     f"LazyMixImages{NODE_POSTFIX}": f"Lazy Mix Images {NODE_POSTFIX}",

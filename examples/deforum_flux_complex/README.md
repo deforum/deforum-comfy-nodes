@@ -7,21 +7,36 @@
 
 [Huemin:](https://huemin.art/) Creator of [Deforum](https://deforum.art/) and [Dream Computing](https://www.dreamcomputing.io/)
 
-[Akatz:](https://akatz.ai/) Workflow builder and founder of [ComfyDock](https://comfydock.com/)
+[Akatz:](https://akatz.ai/) Workflow builder and founder of [ComfyGit](https://github.com/comfygit-ai)
+
+
+## Step 0. Download Nodes
+
+You'll need these custom nodes for the workflow to work properly:
+
+Download via the Manager (search for IDs below) or via Github:
+
+[comfyui-basic-math](https://github.com/akatz-ai/ComfyUI-Basic-Math)
+
+[comfyui-deforum](https://github.com/deforum/deforum-comfy-nodes)
 
 
 ## Step 1. Download models
 
 Required:
 
+Save under checkpoints/
 [flux1-dev-fp8.safetensors](https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors?download=true)
 
 Optional (but recommended):
 
+Save under loras/
 [Hyper-FLUX.1-dev-8steps-lora.safetensors](https://huggingface.co/ByteDance/Hyper-SD/resolve/main/Hyper-FLUX.1-dev-8steps-lora.safetensors?download=true)
 
+Save under loras/
 [FLUX-dev-lora-AntiBlur.safetensors](https://huggingface.co/Shakker-Labs/FLUX.1-dev-LoRA-AntiBlur/resolve/main/FLUX-dev-lora-AntiBlur.safetensors?download=true)
 
+Save under loras/
 [Flux.1-Turbo-Alpha](https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha/tree/main)
 
 
@@ -54,7 +69,7 @@ Optional (but recommended):
 
 The "Schedules" group has a Prompt Schedule node which will let you configure the prompt (or sequence of prompts) using frame indices for the duration of the animation sequence.
 
-These Schedule nodes are part of [FizzNodes](https://github.com/FizzleDorf/ComfyUI_FizzNodes) and the string format follows the [documentation from the same github repo](https://github.com/FizzleDorf/ComfyUI_FizzNodes/wiki/Prompt-Schedules)
+These Schedule nodes follow the string format as FizzNodes: [documentation from the same github repo](https://github.com/FizzleDorf/ComfyUI_FizzNodes/wiki/Prompt-Schedules)
 
 
 ## Step 4. Configure 2D Motion
@@ -76,7 +91,7 @@ The bypassed groups below the Input and Schedules groups can be used to vary the
 
 Each group has a "Fast Bypasser" node which you can click on to un-bypass the group, or you can use the "Fast Groups Bypasser" node above to enable/disable them.
 
-Each Schedule group has a Value Schedule node (part of FizzNodes) which can be used to change values over time based on a frame index and number.
+Each Schedule group has a Value Schedule node which can be used to change values over time based on a frame index and number.
 
 
 ## Step 6. RUN the workflow
