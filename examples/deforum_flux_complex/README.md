@@ -10,6 +10,17 @@
 [Akatz:](https://akatz.ai/) Workflow builder and founder of [ComfyGit](https://github.com/comfygit-ai)
 
 
+## Step 0. Download Nodes
+
+You'll need these custom nodes for the workflow to work properly:
+
+Download via the Manager (search for IDs below) or via Github:
+
+[comfyui-basic-math](https://github.com/akatz-ai/ComfyUI-Basic-Math)
+
+[comfyui-deforum](https://github.com/deforum/deforum-comfy-nodes)
+
+
 ## Step 1. Download models
 
 Required:
