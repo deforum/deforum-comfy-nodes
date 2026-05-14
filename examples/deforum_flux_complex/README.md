@@ -7,21 +7,25 @@
 
 [Huemin:](https://huemin.art/) Creator of [Deforum](https://deforum.art/) and [Dream Computing](https://www.dreamcomputing.io/)
 
-[Akatz:](https://akatz.ai/) Workflow builder and founder of [ComfyDock](https://comfydock.com/)
+[Akatz:](https://akatz.ai/) Workflow builder and founder of [ComfyGit](https://github.com/comfygit-ai)
 
 
 ## Step 1. Download models
 
 Required:
 
+Save under checkpoints/
 [flux1-dev-fp8.safetensors](https://huggingface.co/Comfy-Org/flux1-dev/resolve/main/flux1-dev-fp8.safetensors?download=true)
 
 Optional (but recommended):
 
+Save under loras/
 [Hyper-FLUX.1-dev-8steps-lora.safetensors](https://huggingface.co/ByteDance/Hyper-SD/resolve/main/Hyper-FLUX.1-dev-8steps-lora.safetensors?download=true)
 
+Save under loras/
 [FLUX-dev-lora-AntiBlur.safetensors](https://huggingface.co/Shakker-Labs/FLUX.1-dev-LoRA-AntiBlur/resolve/main/FLUX-dev-lora-AntiBlur.safetensors?download=true)
 
+Save under loras/
 [Flux.1-Turbo-Alpha](https://huggingface.co/alimama-creative/FLUX.1-Turbo-Alpha/tree/main)
 
 
